@@ -1,0 +1,130 @@
+<!DOCTYPE html>
+<html lang="pt" data-theme="dark">
+  <head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Euromilhões - Análise Estratégica</title>
+    <link rel="stylesheet" href="css/style.css">
+    <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  </head>
+  <body>
+    <div class="dashboard-container">
+      <header class="neumorphic-header">
+        <div class="header-left">
+          <h1>Euromilhões</h1>
+          <button class="theme-toggle" id="theme-toggle" aria-label="Alternar tema">
+            <span id="theme-icon">☀</span>
+          </button>
+        </div>
+        <div class="header-actions">
+          <button class="refresh-btn" id="refresh-btn">
+            <span class="icon">↻</span>
+            <span>Atualizar Dados</span>
+          </button>
+        </div>
+      </header>
+      <div class="header-stats">
+        <div class="stat-card glass-card">
+          <h3>Total Sorteios</h3>
+          <p id="total-draws">-</p>
+        </div>
+        <div class="stat-card glass-card">
+          <h3>Fonte de Dados</h3>
+          <p id="data-source">-</p>
+        </div>
+        <div class="stat-card glass-card">
+          <h3>Último Scraping</h3>
+          <p id="last-scraping">-</p>
+        </div>
+      </div>
+      <main class="main-content">
+        <section class="keys-section">
+          <div class="keys-grid">
+            <div class="key-card glass-card">
+              <div class="key-card-header">
+                <h3>Atraso Crítico</h3>
+                <button class="copy-btn" data-key="critical" title="Copiar chave"> Copiar </button>
+              </div>
+              <div class="key-numbers">
+                <div class="numbers-balls" id="critical-numbers"></div>
+                <div class="stars-balls" id="critical-stars"></div>
+              </div>
+              <p class="key-description">Números com maior atraso histórico</p>
+            </div>
+            <div class="key-card glass-card">
+              <div class="key-card-header">
+                <h3>Tendência Quente</h3>
+                <button class="copy-btn" data-key="hot" title="Copiar chave"> Copiar </button>
+              </div>
+              <div class="key-numbers">
+                <div class="numbers-balls" id="hot-numbers"></div>
+                <div class="stars-balls" id="hot-stars"></div>
+              </div>
+              <p class="key-description">Números mais frequentes recentemente</p>
+            </div>
+            <div class="key-card glass-card">
+              <div class="key-card-header">
+                <h3>Cobertura Híbrida</h3>
+                <button class="copy-btn" data-key="hybrid" title="Copiar chave"> Copiar </button>
+              </div>
+              <div class="key-numbers">
+                <div class="numbers-balls" id="hybrid-numbers"></div>
+                <div class="stars-balls" id="hybrid-stars"></div>
+              </div>
+              <p class="key-description">Combinação equilibrada e estratégica</p>
+            </div>
+          </div>
+        </section>
+        <section class="charts-section">
+          <div class="chart-container glass-card">
+            <h3>Frequência dos Números (1-50)</h3>
+            <canvas id="numbersChart"></canvas>
+          </div>
+          <div class="chart-container glass-card">
+            <h3>Frequência das Estrelas (1-12)</h3>
+            <canvas id="starsChart"></canvas>
+          </div>
+        </section>
+        <section class="analysis-section">
+          <div class="analysis-container">
+            <div class="top-numbers glass-card">
+              <h3>Números Mais Frequentes</h3>
+              <ul id="top-numbers-list"></ul>
+            </div>
+            <div class="overdue-numbers glass-card">
+              <h3>Números Mais Atrasados</h3>
+              <ul id="overdue-numbers-list"></ul>
+            </div>
+          </div>
+        </section>
+        <section class="trend-section">
+          <div class="trend-container glass-card">
+            <h3>Análise de Tendências Recentes</h3>
+            <div class="trend-indicators">
+              <div class="trend-item">
+                <div class="trend-title">Números Quentes</div>
+                <div class="trend-values" id="hot-trend">-</div>
+              </div>
+              <div class="trend-item">
+                <div class="trend-title">Estrelas Quentes</div>
+                <div class="trend-values" id="stars-trend">-</div>
+              </div>
+              <div class="trend-item">
+                <div class="trend-title">Frequência Média</div>
+                <div class="trend-values" id="avg-frequency">-</div>
+              </div>
+            </div>
+          </div>
+        </section>
+      </main>
+      <footer class="neumorphic-footer">
+        <p>
+          <strong>AVISO:</strong> Este sistema é uma ferramenta de análise estatística e não garante resultados. Aposte com responsabilidade.
+        </p>
+      </footer>
+    </div>
+    <div id="toast-container"></div>
+    <script src="js/dashboard.js"></script>
+  </body>
+</html>
