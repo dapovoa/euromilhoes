@@ -1,0 +1,7 @@
+selenium
+webdriver-manager
+requests
+tqdm
+beautifulsoup4
+lxml
+flask
