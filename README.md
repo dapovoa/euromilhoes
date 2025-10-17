@@ -16,24 +16,39 @@ The analysis is presented in a web dashboard that provides a visual and interact
 
 ## Setup and Usage
 
-### 1. Get the Code
+### Get the Code
 
 Clone the repository to your local machine.
 
 ```bash
-git clone https://github.com/your-user/euromilhoes.git
+git clone https://github.com/dapovoa/euromilhoes.git
 cd euromilhoes
 ```
 
-### 2. Install Dependencies
+### Create and Activate Virtual Environment
 
-Install the required Python libraries.
+It is recommended to create a virtual environment to isolate project dependencies.
+
+```bash
+# Create the environment
+python3 -m venv venv
+
+# Activate on Linux/macOS
+source venv/bin/activate
+
+# Activate on Windows
+# venv\Scripts\activate
+```
+
+### Install Dependencies
+
+With the virtual environment activated, install the required libraries.
 
 ```bash
 pip install -r requirements.txt
 ```
 
-### 3. Run the Application
+### Run the Application
 
 To run the web dashboard:
 
