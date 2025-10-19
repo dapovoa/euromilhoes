@@ -1,6 +1,6 @@
 # Euromillions Draw Analyzer
 
-![Euromillions Draw Analyzer Screenshot](web/images/screenshot.png)
+![Euromillions Draw Analyzer Screenshot](web/img/screenshot.png)
 
 This project is a tool for performing statistical analysis on historical Euromillions results. It scrapes draw data from 2004 onwards, analyzes it, and generates strategic number combinations.
 
