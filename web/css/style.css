@@ -19,9 +19,9 @@
 }
 
 [data-theme="light"] {
-    --bg-primary: #e0e5ec;
-    --bg-secondary: #d1d9e6;
-    --bg-card: #e0e5ec;
+    --bg-primary: #ffffff;
+    --bg-secondary: #f5f5f5;
+    --bg-card: #ffffff;
     --text-primary: #1a202c;
     --text-secondary: #4a5568;
     --accent-primary: #2563eb;
@@ -30,8 +30,8 @@
     --success: #059669;
     --warning: #d97706;
     --danger: #dc2626;
-    --neu-shadow-dark: #a3b1c6;
-    --neu-shadow-light: #ffffff;
+    --neu-shadow-dark: #c0c0c0;
+    --neu-shadow-light: #f0f0f0;
     --shadow: rgba(0, 0, 0, 0.08);
     --number-bg: linear-gradient(145deg, #2563eb, #1e40af);
     --star-bg: linear-gradient(145deg, #d97706, #b45309);
