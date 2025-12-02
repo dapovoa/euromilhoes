@@ -3,45 +3,38 @@ import sys
 from flask import Flask, jsonify, send_from_directory
 import json
 from datetime import datetime
-from utils import colored_print
-
-# Import shared logic
+from functools import lru_cache
+from utils import colored_print, parse_draw_line
 from logic import analyze_and_generate_keys, EuromilhoesParser, setup_headless_chrome_linux
 
-# Configurar o Flask para servir arquivos estáticos do diretório web
 static_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'web')
 app = Flask(__name__, static_folder=static_dir)
 
-# Rota para servir o index.html
+_analysis_cache = {'data': None, 'timestamp': None}
+
 @app.route('/')
 def dashboard():
     return send_from_directory(static_dir, 'index.html')
 
-# Rota para servir arquivos estáticos (CSS, JS, imagens)
 @app.route('/<path:filename>')
 def static_files(filename):
     return send_from_directory(static_dir, filename)
 
-# Rota para servir arquivos CSS
 @app.route('/css/<path:filename>')
 def css_files(filename):
     return send_from_directory(os.path.join(static_dir, 'css'), filename)
 
-# Rota para servir arquivos JS
 @app.route('/js/<path:filename>')
 def js_files(filename):
     return send_from_directory(os.path.join(static_dir, 'js'), filename)
 
-# Rota para servir arquivos de imagens
 @app.route('/images/<path:filename>')
 def image_files(filename):
     return send_from_directory(os.path.join(static_dir, 'images'), filename)
 
-# Diretório e arquivo de dados
 DATA_DIR = os.path.join(os.path.dirname(__file__), 'data')
 CACHE_FILE = os.path.join(DATA_DIR, 'cache.json')
 
-# Criar diretório de dados se não existir
 os.makedirs(DATA_DIR, exist_ok=True)
 
 def load_cache():
@@ -110,7 +103,7 @@ def scrape_intelligent():
             colored_print("Buscando todos os sorteios desde 2004...", '94')
 
             chrome_binary_path = setup_headless_chrome_linux()
-            parser = EuromilhoesParser(chrome_binary_path=chrome_binary_path)
+            parser = EuromilhoesParser(chrome_binary_path=chrome_binary_path, reuse_browser=True)
             all_draws = parser.extract_all_years(2004, current_year)
             parser.close()
 
@@ -128,7 +121,7 @@ def scrape_intelligent():
         colored_print(f"Verificando dados de {current_year}...", '94')
 
         chrome_binary_path = setup_headless_chrome_linux()
-        parser = EuromilhoesParser(chrome_binary_path=chrome_binary_path)
+        parser = EuromilhoesParser(chrome_binary_path=chrome_binary_path, reuse_browser=True)
         new_draws = parser.extract_all_years(current_year, current_year)
         parser.close()
 
@@ -144,6 +137,7 @@ def scrape_intelligent():
             return existing_draws, cache_start, cache_end
 
         combined_draws = existing_draws + new_unique
+        combined_draws.sort()
 
         colored_print(f"{len(new_unique)} novos sorteios adicionados", '92')
         colored_print(f"Total: {len(combined_draws)} sorteios", '92')
@@ -182,9 +176,21 @@ def get_historical_data(force_refresh=False):
     colored_print("Use 'Atualizar Dados' para obter dados reais", '94')
     return data
 
+def _is_cache_valid(cache_ttl_seconds=60):
+    """Check if cached analysis is still valid (TTL in seconds)"""
+    if _analysis_cache['data'] is None or _analysis_cache['timestamp'] is None:
+        return False
+    age = (datetime.now() - _analysis_cache['timestamp']).total_seconds()
+    return age < cache_ttl_seconds
+
 @app.route('/api/analysis')
 def get_analysis():
-    """API endpoint para obter dados de análise - usa SEMPRE o cache"""
+    """API endpoint para obter dados de análise - usa cache em memória com TTL 60s"""
+    global _analysis_cache
+
+    if _is_cache_valid(cache_ttl_seconds=60):
+        return jsonify(_analysis_cache['data'])
+
     try:
         historical_data = get_historical_data(force_refresh=False)
         strategic_keys = analyze_and_generate_keys(historical_data)
@@ -200,16 +206,16 @@ def get_analysis():
         star_frequencies = [0] * 12
 
         for draw in historical_data:
-            parts = draw.split('+')
-            if len(parts) == 2:
-                numbers = [int(n) for n in parts[0].strip().split()]
-                stars = [int(s) for s in parts[1].strip().split()]
+            try:
+                numbers, stars = parse_draw_line(draw)
                 for n in numbers:
                     if 1 <= n <= 50:
                         number_frequencies[n-1] += 1
                 for s in stars:
                     if 1 <= s <= 12:
                         star_frequencies[s-1] += 1
+            except ValueError:
+                continue
 
         top_numbers = [{'number': i+1, 'frequency': freq} for i, freq in enumerate(number_frequencies)]
         top_numbers.sort(key=lambda x: x['frequency'], reverse=True)
@@ -232,10 +238,20 @@ def get_analysis():
             'cacheTimestamp': cache_data.get('timestamp') if cache_data else None
         }
 
+        last_draw_numbers = []
+        last_draw_stars = []
+        if historical_data and len(historical_data) > 0:
+            try:
+                last_draw_numbers, last_draw_stars = parse_draw_line(historical_data[-1])
+            except ValueError:
+                pass
+
         response_data = {
             'totalDraws': len(historical_data),
             'lastDrawDate': datetime.now().strftime('%Y-%m-%d'),
             'lastUpdate': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+            'lastDrawNumbers': last_draw_numbers,
+            'lastDrawStars': last_draw_stars,
             'cacheInfo': cache_info,
             'strategicKeys': strategic_keys,
             'topNumbers': top_numbers,
@@ -243,6 +259,9 @@ def get_analysis():
             'numberFrequencies': number_frequencies,
             'starFrequencies': star_frequencies
         }
+
+        _analysis_cache['data'] = response_data
+        _analysis_cache['timestamp'] = datetime.now()
 
         return jsonify(response_data)
 
@@ -255,8 +274,13 @@ def get_analysis():
 @app.route('/api/update')
 def update_data():
     """API endpoint para atualizar os dados - faz scraping real"""
+    global _analysis_cache
+
     try:
         colored_print("Pedido de atualização recebido - iniciando scraping...", '94')
+        _analysis_cache['data'] = None
+        _analysis_cache['timestamp'] = None
+
         historical_data = get_historical_data(force_refresh=True)
 
         if historical_data and len(historical_data) > 0:

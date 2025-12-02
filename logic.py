@@ -17,6 +17,7 @@ from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from webdriver_manager.chrome import ChromeDriverManager
 from bs4 import BeautifulSoup
+from utils import parse_draw_line
 
 def setup_headless_chrome_linux():
     project_dir = os.getcwd()
@@ -61,16 +62,33 @@ def setup_headless_chrome_linux():
         return binary_path
     except Exception as e:
         print(f"\n    ↳ Failed to download chrome: {e}", file=sys.stderr)
-        # Fallback for systems with chrome installed
         if os.path.exists("/usr/bin/google-chrome"):
             return "/usr/bin/google-chrome"
         return None
 
+_browser_instance = None
+_browser_lock = None
+
 class EuromilhoesParser:
-    def __init__(self, chrome_binary_path, timeout=15):
+    def __init__(self, chrome_binary_path, timeout=15, reuse_browser=True):
         self.chrome_binary_path = chrome_binary_path
         self.timeout = timeout
-        self.driver = self.setup_driver()
+        self.reuse_browser = reuse_browser
+        self.driver = self.get_or_create_driver() if reuse_browser else self.setup_driver()
+
+    def get_or_create_driver(self):
+        """Get existing browser instance or create new one (pooling/reuse)"""
+        global _browser_instance
+
+        if _browser_instance is not None:
+            try:
+                _browser_instance.execute_script("return 1")
+                return _browser_instance
+            except Exception:
+                _browser_instance = None
+
+        _browser_instance = self.setup_driver()
+        return _browser_instance
 
     def setup_driver(self):
         if not self.chrome_binary_path or not os.path.exists(self.chrome_binary_path):
@@ -83,13 +101,12 @@ class EuromilhoesParser:
         chrome_options.add_argument("--disable-dev-shm-usage")
         chrome_options.add_argument("--log-level=3")
         chrome_options.add_experimental_option('excludeSwitches', ['enable-logging'])
-        
+
         os.environ['WDM_LOG'] = '0'
         try:
             service = Service(ChromeDriverManager().install())
             return webdriver.Chrome(service=service, options=chrome_options)
         except Exception:
-            # Fallback if webdriver-manager fails
             return webdriver.Chrome(options=chrome_options)
 
     def extract_numbers_from_row(self, row):
@@ -116,39 +133,64 @@ class EuromilhoesParser:
         return all_results
 
     def close(self):
-        if self.driver: self.driver.quit()
+        if not self.reuse_browser and self.driver:
+            self.driver.quit()
+
+def initialize_frequency_data(max_value):
+    data = {}
+    for i in range(1, max_value + 1):
+        data[i] = {'count': 0, 'lastDraw': -1, 'gaps': [], 'veryRecent': 0}
+    return data
+
+def update_frequency_data(data_dict, items, index, total_draws, recent_window=30):
+    for item in items:
+        data_dict[item]['count'] += 1
+        if data_dict[item]['lastDraw'] != -1:
+            data_dict[item]['gaps'].append(index - data_dict[item]['lastDraw'])
+        data_dict[item]['lastDraw'] = index
+        if index >= total_draws - recent_window:
+            data_dict[item]['veryRecent'] += 1
+
+def calculate_numbers_analysis(numbers_data, total_draws, default_gap=10):
+    analysis = []
+    for num, data in numbers_data.items():
+        avg_gap = sum(data['gaps']) / len(data['gaps']) if data['gaps'] else default_gap
+        current_gap = total_draws - 1 - data['lastDraw']
+        analysis.append({
+            'number': num,
+            'freq': data['count'],
+            'overdueRatio': current_gap / avg_gap if avg_gap > 0 else 0,
+            'isCritical': current_gap > avg_gap * 2 if avg_gap > 0 else False,
+            'isHot': data['veryRecent'] >= 2
+        })
+    return analysis
+
+def calculate_stars_analysis(stars_data, total_draws, default_gap=5):
+    analysis = []
+    for star, data in stars_data.items():
+        avg_gap = sum(data['gaps']) / len(data['gaps']) if data['gaps'] else default_gap
+        current_gap = total_draws - 1 - data['lastDraw']
+        analysis.append({
+            'star': star,
+            'overdueRatio': current_gap / avg_gap if avg_gap > 0 else 0,
+            'isOverdue': current_gap > avg_gap * 1.5 if avg_gap > 0 else False,
+            'isHot': data['veryRecent'] >= 2
+        })
+    return analysis
 
 def analyze_and_generate_keys(all_draws_lines):
     try:
-        numbers_data, stars_data = {}, {}
-        for i in range(1, 51): numbers_data[i] = {'count': 0, 'lastDraw': -1, 'gaps': [], 'veryRecent': 0}
-        for i in range(1, 13): stars_data[i] = {'count': 0, 'lastDraw': -1, 'gaps': [], 'veryRecent': 0}
-
-        for index, line in enumerate(all_draws_lines):
-            parts = re.split(r'\s*\+\s*', line.strip())
-            main_nums, star_nums = [int(x) for x in parts[0].split()], [int(x) for x in parts[1].split()]
-            for num in main_nums:
-                numbers_data[num]['count'] += 1
-                if numbers_data[num]['lastDraw'] != -1: numbers_data[num]['gaps'].append(index - numbers_data[num]['lastDraw'])
-                numbers_data[num]['lastDraw'] = index
-                if index >= len(all_draws_lines) - 30: numbers_data[num]['veryRecent'] += 1
-            for star in star_nums:
-                stars_data[star]['count'] += 1
-                if stars_data[star]['lastDraw'] != -1: stars_data[star]['gaps'].append(index - stars_data[star]['lastDraw'])
-                stars_data[star]['lastDraw'] = index
-                if index >= len(all_draws_lines) - 30: stars_data[star]['veryRecent'] += 1
+        numbers_data = initialize_frequency_data(50)
+        stars_data = initialize_frequency_data(12)
 
         total_draws = len(all_draws_lines)
-        numbers_analysis, stars_analysis = [], []
+        for index, line in enumerate(all_draws_lines):
+            main_nums, star_nums = parse_draw_line(line)
+            update_frequency_data(numbers_data, main_nums, index, total_draws)
+            update_frequency_data(stars_data, star_nums, index, total_draws)
 
-        for num, data in numbers_data.items():
-            avg_gap = sum(data['gaps']) / len(data['gaps']) if data['gaps'] else 10
-            current_gap = total_draws - 1 - data['lastDraw']
-            numbers_analysis.append({'number': num, 'freq': data['count'], 'overdueRatio': current_gap / avg_gap if avg_gap > 0 else 0, 'isCritical': current_gap > avg_gap * 2 if avg_gap > 0 else False, 'isHot': data['veryRecent'] >= 2})
-        for star, data in stars_data.items():
-            avg_gap = sum(data['gaps']) / len(data['gaps']) if data['gaps'] else 5
-            current_gap = total_draws - 1 - data['lastDraw']
-            stars_analysis.append({'star': star, 'overdueRatio': current_gap / avg_gap if avg_gap > 0 else 0, 'isOverdue': current_gap > avg_gap * 1.5 if avg_gap > 0 else False, 'isHot': data['veryRecent'] >= 2})
+        numbers_analysis = calculate_numbers_analysis(numbers_data, total_draws)
+        stars_analysis = calculate_stars_analysis(stars_data, total_draws)
 
         critical_nums = sorted([n for n in numbers_analysis if n['isCritical']], key=lambda x: x['overdueRatio'], reverse=True)
         hot_nums = sorted([n for n in numbers_analysis if n['isHot']], key=lambda x: x['number'])
@@ -161,30 +203,58 @@ def analyze_and_generate_keys(all_draws_lines):
         def generate_key(num_sources, star_sources):
             key_nums, key_stars = [], []
             temp_used_nums, temp_used_stars = set(), set()
+
             for source, count in num_sources:
                 for num_data in source:
-                    if len(key_nums) >= count: break
+                    if len(key_nums) >= count:
+                        break
                     num = num_data['number']
                     if num not in used_nums and num not in temp_used_nums:
                         key_nums.append(num)
                         temp_used_nums.add(num)
+
             for source, count in star_sources:
                 for star_data in source:
-                    if len(key_stars) >= count: break
+                    if len(key_stars) >= count:
+                        break
                     star = star_data['star']
                     if star not in used_stars and star not in temp_used_stars:
                         key_stars.append(star)
                         temp_used_stars.add(star)
+
+            all_available_nums = premium_nums + numbers_analysis
+            all_available_stars = hot_stars + stars_analysis
+
             while len(key_nums) < 5:
-                num = next((n['number'] for n in premium_nums + numbers_analysis if n['number'] not in used_nums and n['number'] not in temp_used_nums), None)
-                if num is None: num = next(i for i in range(1, 51) if i not in used_nums and i not in temp_used_nums)
-                key_nums.append(num)
-                temp_used_nums.add(num)
+                num = None
+                for n in all_available_nums:
+                    if n['number'] not in used_nums and n['number'] not in temp_used_nums:
+                        num = n['number']
+                        break
+                if num is None:
+                    for i in range(1, 51):
+                        if i not in used_nums and i not in temp_used_nums:
+                            num = i
+                            break
+                if num is not None:
+                    key_nums.append(num)
+                    temp_used_nums.add(num)
+
             while len(key_stars) < 2:
-                star = next((s['star'] for s in hot_stars + stars_analysis if s['star'] not in used_stars and s['star'] not in temp_used_stars), None)
-                if star is None: star = next(i for i in range(1, 13) if i not in used_stars and i not in temp_used_stars)
-                key_stars.append(star)
-                temp_used_stars.add(star)
+                star = None
+                for s in all_available_stars:
+                    if s['star'] not in used_stars and s['star'] not in temp_used_stars:
+                        star = s['star']
+                        break
+                if star is None:
+                    for i in range(1, 13):
+                        if i not in used_stars and i not in temp_used_stars:
+                            star = i
+                            break
+                if star is not None:
+                    key_stars.append(star)
+                    temp_used_stars.add(star)
+
             used_nums.update(key_nums)
             used_stars.update(key_stars)
             return {'numbers': sorted(key_nums), 'stars': sorted(key_stars)}

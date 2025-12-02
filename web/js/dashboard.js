@@ -1,8 +1,24 @@
 let currentData = null;
 
+async function fetchWithTimeout(url, timeout = 10000) {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), timeout);
+
+    try {
+        const response = await fetch(url, { signal: controller.signal });
+        clearTimeout(timeoutId);
+        return response;
+    } catch (error) {
+        clearTimeout(timeoutId);
+        throw error;
+    }
+}
+
 document.addEventListener('DOMContentLoaded', function() {
 
     initTheme();
+
+    document.getElementById('current-year').textContent = new Date().getFullYear();
 
     loadDashboardData();
 
@@ -31,12 +47,10 @@ function toggleTheme() {
     localStorage.setItem('theme', newTheme);
     updateThemeIcon(newTheme);
 
-    if (currentData) {
-        createNumbersChart(currentData.numberFrequencies);
-        createStarsChart(currentData.starFrequencies);
+    if (currentData && numbersChartInstance && starsChartInstance) {
+        updateChartColors(numbersChartInstance);
+        updateChartColors(starsChartInstance);
     }
-
-    showToast('Tema alterado para ' + (newTheme === 'dark' ? 'escuro' : 'claro'), 'info');
 }
 
 function updateThemeIcon(theme) {
@@ -44,16 +58,25 @@ function updateThemeIcon(theme) {
     icon.textContent = theme === 'dark' ? '☀' : '🌙';
 }
 
+function updateChartColors(chartInstance) {
+    if (!chartInstance || !chartInstance.options) return;
+
+    const textColor = getComputedStyle(document.documentElement).getPropertyValue('--text-primary').trim();
+
+    if (chartInstance.options.scales && chartInstance.options.scales.y) {
+        chartInstance.options.scales.y.ticks.color = textColor || '#e4e7ec';
+    }
+
+    if (chartInstance.options.scales && chartInstance.options.scales.x) {
+        chartInstance.options.scales.x.ticks.color = textColor || '#e4e7ec';
+    }
+
+    chartInstance.update('none');
+}
+
 async function loadDashboardData() {
     try {
-
-        const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), 10000);
-
-        const response = await fetch('/api/analysis', {
-            signal: controller.signal
-        });
-        clearTimeout(timeoutId);
+        const response = await fetchWithTimeout('/api/analysis', 10000);
 
         if (!response.ok) {
             throw new Error(`HTTP error! status: ${response.status}`);
@@ -62,6 +85,7 @@ async function loadDashboardData() {
         currentData = data;
 
         updateStats(data);
+        updateLastResult(data);
         updateStrategicKeys(data.strategicKeys);
         updateTopNumbers(data.topNumbers);
         updateOverdueNumbers(data.overdueNumbers);
@@ -76,18 +100,13 @@ async function loadDashboardData() {
         currentData = simulatedData;
 
         updateStats(simulatedData);
+        updateLastResult(simulatedData);
         updateStrategicKeys(simulatedData.strategicKeys);
         updateTopNumbers(simulatedData.topNumbers);
         updateOverdueNumbers(simulatedData.overdueNumbers);
         updateTrends(simulatedData);
         createNumbersChart(simulatedData.numberFrequencies);
         createStarsChart(simulatedData.starFrequencies);
-
-        if (error.name === 'AbortError') {
-            showToast('Timeout ao carregar dados. Usando dados simulados.', 'error');
-        } else {
-            showToast('Erro ao carregar dados. Usando dados simulados.', 'error');
-        }
     }
 }
 
@@ -99,39 +118,26 @@ async function refreshData() {
     const keyCards = document.querySelectorAll('.key-card');
     keyCards.forEach(card => card.classList.add('updating'));
 
+    const trendCards = document.querySelectorAll('.trend-card');
+    trendCards.forEach(card => card.classList.add('updating'));
+
     try {
-
-        showToast('Atualizando dados... Pode demorar alguns minutos.', 'info');
-
-        const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), 300000);
-
-        const response = await fetch('/api/update', {
-            signal: controller.signal
-        });
-        clearTimeout(timeoutId);
-
+        const response = await fetchWithTimeout('/api/update', 300000);
         const result = await response.json();
 
         if (result.status === 'success') {
-
             await loadDashboardData();
-            showToast(result.message || 'Dados atualizados com sucesso!', 'success');
-        } else {
-            showToast(result.message || 'Erro ao atualizar dados', 'error');
         }
     } catch (error) {
         console.error('Erro ao atualizar:', error);
-        if (error.name === 'AbortError') {
-            showToast('Timeout na atualizacao. Tente novamente.', 'error');
-        } else {
-            showToast('Erro ao atualizar dados', 'error');
-        }
     } finally {
         btn.classList.remove('loading');
         btn.disabled = false;
 
         keyCards.forEach(card => card.classList.remove('updating'));
+
+        const trendCards = document.querySelectorAll('.trend-card');
+        trendCards.forEach(card => card.classList.remove('updating'));
     }
 }
 
@@ -156,6 +162,42 @@ function updateStats(data) {
     }
 }
 
+function updateLastResult(data) {
+    const container = document.getElementById('last-result-balls');
+    if (!container || !data.lastDrawNumbers) {
+        container.innerHTML = '-';
+        return;
+    }
+
+    container.innerHTML = '';
+    const fragment = document.createDocumentFragment();
+
+    data.lastDrawNumbers.forEach((num, index) => {
+        const numStr = num.toString().padStart(2, '0');
+        const ball = document.createElement('span');
+        ball.className = 'result-ball number';
+        ball.textContent = numStr;
+        ball.style.animationDelay = `${index * 0.08}s`;
+        fragment.appendChild(ball);
+    });
+
+    const plus = document.createElement('span');
+    plus.className = 'result-plus';
+    plus.textContent = '+';
+    fragment.appendChild(plus);
+
+    data.lastDrawStars.forEach((star, index) => {
+        const starStr = star.toString().padStart(2, '0');
+        const ball = document.createElement('span');
+        ball.className = 'result-ball star';
+        ball.textContent = starStr;
+        ball.style.animationDelay = `${(index + 5) * 0.08}s`;
+        fragment.appendChild(ball);
+    });
+
+    container.appendChild(fragment);
+}
+
 function updateStrategicKeys(keys) {
     if (!keys) return;
 
@@ -175,118 +217,161 @@ function updateStrategicKeys(keys) {
     }
 }
 
-function renderNumberBalls(containerId, numbers) {
+function renderBalls(containerId, items, ballType, options = {}) {
     const container = document.getElementById(containerId);
-    if (!container || !numbers) return;
+    if (!container || !items) return;
 
     container.innerHTML = '';
+    const fragment = document.createDocumentFragment();
 
-    numbers.forEach((num, index) => {
-        const numStr = num.toString().padStart(2, '0');
+    if (options.includePlus) {
+        const plus = document.createElement('span');
+        plus.className = 'plus-sign';
+        plus.textContent = '+';
+        fragment.appendChild(plus);
+    }
+
+    items.forEach((item, index) => {
+        const itemStr = item.toString().padStart(2, '0');
         const ball = document.createElement('span');
-        ball.className = 'number-ball';
-        ball.textContent = numStr;
-        ball.style.animationDelay = `${index * 0.1}s`;
-        container.appendChild(ball);
+        ball.className = ballType;
+        ball.textContent = itemStr;
+        ball.style.animationDelay = `${(index + (options.delayOffset || 0)) * 0.1}s`;
+        fragment.appendChild(ball);
     });
+
+    container.appendChild(fragment);
+}
+
+function renderNumberBalls(containerId, numbers) {
+    renderBalls(containerId, numbers, 'number-ball');
 }
 
 function renderStarBalls(containerId, stars) {
-    const container = document.getElementById(containerId);
-    if (!container || !stars) return;
-
-    container.innerHTML = '<span class="plus-sign">+</span>';
-
-    stars.forEach((star, index) => {
-        const starStr = star.toString().padStart(2, '0');
-        const ball = document.createElement('span');
-        ball.className = 'star-ball';
-        ball.textContent = starStr;
-        ball.style.animationDelay = `${(index + 5) * 0.1}s`;
-        container.appendChild(ball);
-    });
+    renderBalls(containerId, stars, 'star-ball', { includePlus: true, delayOffset: 5 });
 }
 
-function updateTopNumbers(topNumbers) {
-    if (!topNumbers) return;
+function updateList(listId, data, formatter) {
+    if (!data) return;
 
-    const list = document.getElementById('top-numbers-list');
+    const list = document.getElementById(listId);
     if (!list) return;
 
     list.innerHTML = '';
-    topNumbers.forEach((item, index) => {
+    const fragment = document.createDocumentFragment();
+
+    data.forEach((item, index) => {
         if (item) {
             const li = document.createElement('li');
             li.style.animationDelay = `${index * 0.05}s`;
-            li.innerHTML = `<span>${item.number || 'N/A'}</span> <span class="frequency">${item.frequency || 0} vezes</span>`;
-            list.appendChild(li);
+            li.innerHTML = formatter(item);
+            fragment.appendChild(li);
         }
+    });
+
+    list.appendChild(fragment);
+}
+
+function updateTopNumbers(topNumbers) {
+    updateList('top-numbers-list', topNumbers, (item) => {
+        return `<span>${item.number || 'N/A'}</span> <span class="frequency">${item.frequency || 0} vezes</span>`;
     });
 }
 
 function updateOverdueNumbers(overdueNumbers) {
-    if (!overdueNumbers) return;
-
-    const list = document.getElementById('overdue-numbers-list');
-    if (!list) return;
-
-    list.innerHTML = '';
-    overdueNumbers.forEach((item, index) => {
-        if (item) {
-            const li = document.createElement('li');
-            li.style.animationDelay = `${index * 0.05}s`;
-            const drawsText = (item.drawsAgo === 1) ? 'sorteio' : 'sorteios';
-            li.innerHTML = `<span>${item.number || 'N/A'}</span> <span class="draws-ago">${item.drawsAgo || 0} ${drawsText}</span>`;
-            list.appendChild(li);
-        }
+    updateList('overdue-numbers-list', overdueNumbers, (item) => {
+        const drawsText = (item.drawsAgo === 1) ? 'sorteio' : 'sorteios';
+        return `<span>${item.number || 'N/A'}</span> <span class="draws-ago">${item.drawsAgo || 0} ${drawsText}</span>`;
     });
+}
+
+function renderTrendBalls(containerId, numbers, stars, showNumbers, showStars) {
+    const container = document.getElementById(containerId);
+    if (!container) return;
+
+    container.innerHTML = '';
+    const fragment = document.createDocumentFragment();
+
+    for (let i = 0; i < 5; i++) {
+        const ball = document.createElement('span');
+        ball.className = 'trend-ball number';
+        if (showNumbers && i < numbers.length) {
+            ball.textContent = numbers[i].toString().padStart(2, '0');
+        } else {
+            ball.classList.add('empty');
+        }
+        ball.style.animationDelay = `${i * 0.1}s`;
+        fragment.appendChild(ball);
+    }
+
+    const plus = document.createElement('span');
+    plus.className = 'plus-sign';
+    plus.textContent = '+';
+    fragment.appendChild(plus);
+
+    for (let i = 0; i < 2; i++) {
+        const ball = document.createElement('span');
+        ball.className = 'trend-ball star';
+        if (showStars && i < stars.length) {
+            ball.textContent = stars[i].toString().padStart(2, '0');
+        } else {
+            ball.classList.add('empty');
+        }
+        ball.style.animationDelay = `${(i + 5) * 0.1}s`;
+        fragment.appendChild(ball);
+    }
+
+    container.appendChild(fragment);
 }
 
 function updateTrends(data) {
     if (!data.strategicKeys) return;
 
-    if (data.strategicKeys.secundaria && data.strategicKeys.secundaria.numbers) {
-        const hotNumbers = data.strategicKeys.secundaria.numbers.map(n => n.toString().padStart(2, '0')).join(', ');
-        document.getElementById('hot-trend').textContent = hotNumbers;
+    if (data.strategicKeys.secundaria) {
+        const numbers = data.strategicKeys.secundaria.numbers || [];
+        const stars = data.strategicKeys.secundaria.stars || [];
+
+        renderTrendBalls('hot-trend-balls', numbers, stars, true, false);
+        renderTrendBalls('stars-trend-balls', numbers, stars, false, true);
     }
 
-    if (data.strategicKeys.secundaria && data.strategicKeys.secundaria.stars) {
-        const hotStars = data.strategicKeys.secundaria.stars.map(s => s.toString().padStart(2, '0')).join(', ');
-        document.getElementById('stars-trend').textContent = hotStars;
-    }
+    if (data.totalDraws && data.numberFrequencies) {
+        const avgFrequency = data.numberFrequencies.reduce((a, b) => a + b, 0) / 50;
+        const percentage = ((avgFrequency / data.totalDraws) * 100).toFixed(1);
 
-    if (data.totalDraws) {
-        const avgFreq = (data.totalDraws / 50).toFixed(1);
-        document.getElementById('avg-frequency').textContent = `1 em ${Math.round(50 / avgFreq)} sorteios`;
+        const freqEl = document.getElementById('avg-frequency');
+        freqEl.innerHTML = `
+            <div class="freq-percentage">${percentage}%</div>
+            <div class="freq-subtitle">por número</div>
+        `;
     }
 }
 
 let numbersChartInstance = null;
 let starsChartInstance = null;
 
-function createNumbersChart(numberFrequencies) {
-    if (!numberFrequencies) return;
+function createFrequencyChart(canvasId, frequencies, labelCount, colors, chartInstanceRef) {
+    if (!frequencies) return null;
 
-    const ctx = document.getElementById('numbersChart');
-    if (!ctx) return;
+    const ctx = document.getElementById(canvasId);
+    if (!ctx) return null;
 
-    if (numbersChartInstance) {
-        numbersChartInstance.destroy();
+    if (chartInstanceRef) {
+        chartInstanceRef.destroy();
     }
 
-    const labels = Array.from({length: 50}, (_, i) => i + 1);
-
+    const labels = Array.from({length: labelCount}, (_, i) => i + 1);
     const textColor = getComputedStyle(document.documentElement).getPropertyValue('--text-primary').trim();
 
-    numbersChartInstance = new Chart(ctx, {
+    const chartInstance = new Chart(ctx, {
         type: 'bar',
         data: {
             labels: labels,
             datasets: [{
                 label: 'Frequência',
-                data: numberFrequencies,
-                backgroundColor: 'rgba(37, 99, 235, 0.7)',
-                borderColor: 'rgba(30, 64, 175, 1)',
+                data: frequencies,
+                backgroundColor: colors.background,
+                borderColor: colors.border,
                 borderWidth: 2,
                 borderRadius: 4,
             }]
@@ -301,7 +386,7 @@ function createNumbersChart(numberFrequencies) {
                     padding: 12,
                     titleFont: { size: 14 },
                     bodyFont: { size: 13 },
-                    borderColor: 'rgba(30, 64, 175, 0.5)',
+                    borderColor: colors.tooltipBorder,
                     borderWidth: 1
                 }
             },
@@ -328,7 +413,7 @@ function createNumbersChart(numberFrequencies) {
                         color: textColor || '#e4e7ec',
                         maxRotation: 0,
                         autoSkip: true,
-                        maxTicksLimit: 25,
+                        maxTicksLimit: labelCount > 20 ? 25 : labelCount,
                         font: {
                             size: 10
                         }
@@ -341,82 +426,36 @@ function createNumbersChart(numberFrequencies) {
             }
         }
     });
+
+    return chartInstance;
+}
+
+function createNumbersChart(numberFrequencies) {
+    numbersChartInstance = createFrequencyChart(
+        'numbersChart',
+        numberFrequencies,
+        50,
+        {
+            background: 'rgba(37, 99, 235, 0.7)',
+            border: 'rgba(30, 64, 175, 1)',
+            tooltipBorder: 'rgba(30, 64, 175, 0.5)'
+        },
+        numbersChartInstance
+    );
 }
 
 function createStarsChart(starFrequencies) {
-    if (!starFrequencies) return;
-
-    const ctx = document.getElementById('starsChart');
-    if (!ctx) return;
-
-    if (starsChartInstance) {
-        starsChartInstance.destroy();
-    }
-
-    const labels = Array.from({length: 12}, (_, i) => i + 1);
-
-    const textColor = getComputedStyle(document.documentElement).getPropertyValue('--text-primary').trim();
-
-    starsChartInstance = new Chart(ctx, {
-        type: 'bar',
-        data: {
-            labels: labels,
-            datasets: [{
-                label: 'Frequência',
-                data: starFrequencies,
-                backgroundColor: 'rgba(217, 119, 6, 0.7)',
-                borderColor: 'rgba(180, 83, 9, 1)',
-                borderWidth: 2,
-                borderRadius: 4,
-            }]
+    starsChartInstance = createFrequencyChart(
+        'starsChart',
+        starFrequencies,
+        12,
+        {
+            background: 'rgba(217, 119, 6, 0.7)',
+            border: 'rgba(180, 83, 9, 1)',
+            tooltipBorder: 'rgba(217, 119, 6, 0.5)'
         },
-        options: {
-            responsive: true,
-            maintainAspectRatio: true,
-            plugins: {
-                legend: { display: false },
-                tooltip: {
-                    backgroundColor: 'rgba(0, 0, 0, 0.8)',
-                    padding: 12,
-                    titleFont: { size: 14 },
-                    bodyFont: { size: 13 },
-                    borderColor: 'rgba(217, 119, 6, 0.5)',
-                    borderWidth: 1
-                }
-            },
-            scales: {
-                y: {
-                    beginAtZero: true,
-                    grid: {
-                        color: 'rgba(255, 255, 255, 0.05)',
-                        drawBorder: false
-                    },
-                    ticks: {
-                        color: textColor || '#e4e7ec',
-                        font: {
-                            size: 11
-                        }
-                    }
-                },
-                x: {
-                    grid: {
-                        display: false,
-                        drawBorder: false
-                    },
-                    ticks: {
-                        color: textColor || '#e4e7ec',
-                        font: {
-                            size: 10
-                        }
-                    }
-                }
-            },
-            animation: {
-                duration: 1000,
-                easing: 'easeOutQuart'
-            }
-        }
-    });
+        starsChartInstance
+    );
 }
 
 function copyKey(keyType) {
@@ -442,28 +481,10 @@ function copyKey(keyType) {
     const text = `${numbers} + ${stars}`;
 
     navigator.clipboard.writeText(text).then(() => {
-        showToast('Chave copiada para a área de transferência!', 'success');
+        console.log('Chave copiada:', text);
     }).catch(() => {
-        showToast('Erro ao copiar chave', 'error');
+        console.error('Erro ao copiar chave');
     });
-}
-
-function showToast(message, type = 'info') {
-    const container = document.getElementById('toast-container');
-    if (!container) return;
-
-    const toast = document.createElement('div');
-    toast.className = `toast ${type}`;
-    toast.textContent = message;
-
-    container.appendChild(toast);
-
-    setTimeout(() => {
-        toast.style.animation = 'slideOutRight 0.3s ease-out';
-        setTimeout(() => {
-            container.removeChild(toast);
-        }, 300);
-    }, 3000);
 }
 
 function formatDate(dateString) {
@@ -486,6 +507,8 @@ function getSimulatedData() {
         totalDraws: 1868,
         lastDrawDate: new Date().toISOString(),
         lastUpdate: new Date().toISOString(),
+        lastDrawNumbers: [6, 11, 17, 35, 44],
+        lastDrawStars: [3, 7],
         strategicKeys: {
             principal: { numbers: [19, 23, 28, 34, 44], stars: [2, 11] },
             secundaria: { numbers: [1, 3, 4, 21, 42], stars: [1, 3] },
@@ -510,17 +533,3 @@ function getSimulatedData() {
     };
 }
 
-const style = document.createElement('style');
-style.textContent = `
-@keyframes slideOutRight {
-    from {
-        transform: translateX(0);
-        opacity: 1;
-    }
-    to {
-        transform: translateX(400px);
-        opacity: 0;
-    }
-}
-`;
-document.head.appendChild(style);
