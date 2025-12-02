@@ -1,8 +1,8 @@
+# Euromilhões Analyzer
+
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT) [![Python](https://img.shields.io/badge/Python-3-3776AB?logo=python)](https://www.python.org/) [![Selenium](https://img.shields.io/badge/Selenium-4-43B02A?logo=selenium)](https://www.selenium.dev/) [![Flask](https://img.shields.io/badge/Flask-3-000000?logo=flask)](https://flask.palletsprojects.com/) [![Beautiful Soup](https://img.shields.io/badge/Beautiful%20Soup-4-000000?logo=python&color=orange)](https://www.crummy.com/software/BeautifulSoup/)
 
-# Euromillions Draw Analyzer
-
-![Euromillions Draw Analyzer Screenshot](web/img/screenshot.png)
+![Euromilhões Analyzer Screenshot](web/img/screenshot.png)
 
 This project is a tool for performing statistical analysis on historical Euromillions results. It scrapes draw data from 2004 onwards, analyzes it, and generates strategic number combinations.
 
