@@ -4,7 +4,7 @@ from flask import Flask, jsonify, send_from_directory
 import json
 from datetime import datetime
 from functools import lru_cache
-from utils import colored_print, parse_draw_line
+from utils import colored_print, parse_draw_line, log_error, log_success, log_warning, log_info, log_cache
 from logic import analyze_and_generate_keys, EuromilhoesParser, setup_headless_chrome_linux
 
 static_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'web')
@@ -45,7 +45,7 @@ def load_cache():
                 cache_data = json.load(f)
                 return cache_data
         except Exception as e:
-            colored_print(f"Erro ao carregar cache: {e}", '91')
+            log_error(f"Erro ao carregar cache: {e}")
     return None
 
 def save_cache(data, is_real_data=False, year_start=None, year_end=None):
@@ -66,10 +66,10 @@ def save_cache(data, is_real_data=False, year_start=None, year_end=None):
             json.dump(cache_data, f, ensure_ascii=False, indent=2)
         source_text = 'real' if is_real_data else 'simulado'
         year_text = f" ({year_start}-{year_end})" if year_start and year_end else ""
-        colored_print(f"Salvo: {len(data)} sorteios ({source_text}){year_text}", '96')
+        log_cache(f"Salvo: {len(data)} sorteios ({source_text}){year_text}")
         return True
     except Exception as e:
-        colored_print(f"Erro ao salvar cache: {e}", '91')
+        log_error(f"Erro ao salvar cache: {e}")
         return False
 
 def get_simulated_data():
@@ -99,8 +99,8 @@ def scrape_intelligent():
         cache_data = load_cache()
 
         if not cache_data or 'draws' not in cache_data or len(cache_data['draws']) == 0:
-            colored_print("Cache vazio, primeira execucao", '93')
-            colored_print("Buscando todos os sorteios desde 2004...", '94')
+            log_warning("Cache vazio, primeira execucao")
+            log_info("Buscando todos os sorteios desde 2004...")
 
             chrome_binary_path = setup_headless_chrome_linux()
             parser = EuromilhoesParser(chrome_binary_path=chrome_binary_path, reuse_browser=True)
@@ -108,17 +108,17 @@ def scrape_intelligent():
             parser.close()
 
             if all_draws and len(all_draws) > 0:
-                colored_print(f"Scraping completo: {len(all_draws)} sorteios obtidos", '92')
+                log_success(f"Scraping completo: {len(all_draws)} sorteios obtidos")
                 return all_draws, 2004, current_year
             else:
-                colored_print("Scraping falhou, usando dados simulados", '91')
+                log_error("Scraping falhou, usando dados simulados")
                 return get_simulated_data(), None, None
 
         existing_draws = cache_data['draws']
         cache_start, cache_end = get_cache_year_range(cache_data)
 
-        colored_print(f"Cache encontrado: {len(existing_draws)} sorteios ({cache_start}-{cache_end})", '96')
-        colored_print(f"Verificando dados de {current_year}...", '94')
+        log_cache(f"Cache encontrado: {len(existing_draws)} sorteios ({cache_start}-{cache_end})")
+        log_info(f"Verificando dados de {current_year}...")
 
         chrome_binary_path = setup_headless_chrome_linux()
         parser = EuromilhoesParser(chrome_binary_path=chrome_binary_path, reuse_browser=True)
@@ -126,42 +126,42 @@ def scrape_intelligent():
         parser.close()
 
         if not new_draws or len(new_draws) == 0:
-            colored_print("Nenhum dado novo encontrado", '93')
+            log_warning("Nenhum dado novo encontrado")
             return existing_draws, cache_start, cache_end
 
         existing_set = set(existing_draws)
         new_unique = [d for d in new_draws if d not in existing_set]
 
         if len(new_unique) == 0:
-            colored_print("Todos os dados ja estavam no cache", '93')
+            log_warning("Todos os dados ja estavam no cache")
             return existing_draws, cache_start, cache_end
 
         combined_draws = existing_draws + new_unique
         combined_draws.sort()
 
-        colored_print(f"{len(new_unique)} novos sorteios adicionados", '92')
-        colored_print(f"Total: {len(combined_draws)} sorteios", '92')
+        log_success(f"{len(new_unique)} novos sorteios adicionados")
+        log_success(f"Total: {len(combined_draws)} sorteios")
 
         return combined_draws, cache_start or 2004, current_year
 
     except Exception as e:
-        colored_print(f"Erro no scraping: {e}", '91')
+        log_error(f"Erro no scraping: {e}")
         import traceback
         traceback.print_exc()
 
         cache_data = load_cache()
         if cache_data and 'draws' in cache_data and len(cache_data['draws']) > 0:
-            colored_print(f"Mantendo cache existente: {len(cache_data['draws'])} sorteios", '93')
+            log_warning(f"Mantendo cache existente: {len(cache_data['draws'])} sorteios")
             cache_start, cache_end = get_cache_year_range(cache_data)
             return cache_data['draws'], cache_start, cache_end
         else:
-            colored_print("Gerando dados simulados", '93')
+            log_warning("Gerando dados simulados")
             return get_simulated_data(), None, None
 
 def get_historical_data(force_refresh=False):
     """Função para obter dados históricos - usa cache em disco"""
     if force_refresh:
-        colored_print("Atualizacao de dados solicitada", '94')
+        log_info("Atualizacao de dados solicitada")
         data, year_start, year_end = scrape_intelligent()
         save_cache(data, is_real_data=True, year_start=year_start, year_end=year_end)
         return data
@@ -170,10 +170,10 @@ def get_historical_data(force_refresh=False):
     if cache_data and 'draws' in cache_data:
         return cache_data['draws']
 
-    colored_print("Cache nao encontrado - gerando dados simulados iniciais...", '93')
+    log_warning("Cache nao encontrado - gerando dados simulados iniciais...")
     data = get_simulated_data()
     save_cache(data, is_real_data=False)
-    colored_print("Use 'Atualizar Dados' para obter dados reais", '94')
+    log_info("Use 'Atualizar Dados' para obter dados reais")
     return data
 
 def _is_cache_valid(cache_ttl_seconds=60):
@@ -266,7 +266,7 @@ def get_analysis():
         return jsonify(response_data)
 
     except Exception as e:
-        colored_print(f"Erro na API: {e}", '91')
+        log_error(f"Erro na API: {e}")
         import traceback
         traceback.print_exc()
         return jsonify({'error': str(e)}), 500
@@ -277,7 +277,7 @@ def update_data():
     global _analysis_cache
 
     try:
-        colored_print("Pedido de atualização recebido - iniciando scraping...", '94')
+        log_info("Pedido de atualização recebido - iniciando scraping...")
         _analysis_cache['data'] = None
         _analysis_cache['timestamp'] = None
 
@@ -294,7 +294,7 @@ def update_data():
             return jsonify({'status': 'error', 'message': 'Falha ao obter dados'}), 500
 
     except Exception as e:
-        colored_print(f"Erro ao atualizar dados: {e}", '91')
+        log_error(f"Erro ao atualizar dados: {e}")
         import traceback
         traceback.print_exc()
         return jsonify({'status': 'error', 'message': str(e)}), 500
@@ -310,7 +310,7 @@ if __name__ == '__main__':
     cli = sys.modules['flask.cli']
     cli.show_server_banner = lambda *x: None
 
-    colored_print("Servidor iniciado em http://127.0.0.1:5001", '92')
-    colored_print("Pressione CTRL+C para sair", '94')
+    log_success("Servidor iniciado em http://127.0.0.1:5001")
+    log_info("Pressione CTRL+C para sair")
 
     app.run(debug=False, host='0.0.0.0', port=5001, use_reloader=False)
