@@ -172,6 +172,7 @@ def calculate_stars_analysis(stars_data, total_draws, default_gap=5):
         current_gap = total_draws - 1 - data['lastDraw']
         analysis.append({
             'star': star,
+            'freq': data['count'],
             'overdueRatio': current_gap / avg_gap if avg_gap > 0 else 0,
             'isOverdue': current_gap > avg_gap * 1.5 if avg_gap > 0 else False,
             'isHot': data['veryRecent'] >= 2
@@ -179,6 +180,18 @@ def calculate_stars_analysis(stars_data, total_draws, default_gap=5):
     return analysis
 
 def compute_frequency_analysis(all_draws_lines):
+    """
+    Analyze historical draws and return frequency data for numbers and stars.
+
+    Returns a dict with:
+      - total_draws: int
+      - numbers: list of {number, frequency, avg_gap, current_gap, overdue_ratio}
+      - stars:   list of {star, frequency, avg_gap, current_gap, overdue_ratio}
+      - hot_numbers: numbers appearing above average frequency
+      - overdue_numbers: numbers with longest gap since last appearance
+      - number_frequencies: array[50] of raw counts
+      - star_frequencies: array[12] of raw counts
+    """
     try:
         numbers_data = initialize_frequency_data(50)
         stars_data = initialize_frequency_data(12)
@@ -192,77 +205,38 @@ def compute_frequency_analysis(all_draws_lines):
         numbers_analysis = calculate_numbers_analysis(numbers_data, total_draws)
         stars_analysis = calculate_stars_analysis(stars_data, total_draws)
 
-        critical_nums = sorted([n for n in numbers_analysis if n['isCritical']], key=lambda x: x['overdueRatio'], reverse=True)
-        hot_nums = sorted([n for n in numbers_analysis if n['isHot']], key=lambda x: x['number'])
-        premium_nums = sorted([n for n in numbers_analysis if n['freq'] > (total_draws / 50 * 1.1)], key=lambda x: x['freq'], reverse=True)
-        overdue_stars = sorted([s for s in stars_analysis if s['isOverdue']], key=lambda x: x['overdueRatio'], reverse=True)
-        hot_stars = sorted([s for s in stars_analysis if s['isHot']], key=lambda x: x['star'])
+        # Raw frequency arrays
+        number_frequencies = [0] * 50
+        star_frequencies = [0] * 12
+        for n in numbers_data:
+            number_frequencies[n - 1] = numbers_data[n]['count']
+        for s in stars_data:
+            star_frequencies[s - 1] = stars_data[s]['count']
 
-        used_nums, used_stars, keys = set(), set(), {}
+        # Hot numbers (above average frequency)
+        avg_freq = total_draws / 50
+        hot_numbers = sorted(
+            [n for n in numbers_analysis if n['freq'] > avg_freq * 1.1],
+            key=lambda x: x['freq'],
+            reverse=True,
+        )
 
-        def generate_key(num_sources, star_sources):
-            key_nums, key_stars = [], []
-            temp_used_nums, temp_used_stars = set(), set()
+        # Overdue numbers (longest current gap)
+        overdue_numbers = sorted(
+            numbers_analysis,
+            key=lambda x: x['overdueRatio'],
+            reverse=True,
+        )[:10]
 
-            for source, count in num_sources:
-                for num_data in source:
-                    if len(key_nums) >= count:
-                        break
-                    num = num_data['number']
-                    if num not in used_nums and num not in temp_used_nums:
-                        key_nums.append(num)
-                        temp_used_nums.add(num)
-
-            for source, count in star_sources:
-                for star_data in source:
-                    if len(key_stars) >= count:
-                        break
-                    star = star_data['star']
-                    if star not in used_stars and star not in temp_used_stars:
-                        key_stars.append(star)
-                        temp_used_stars.add(star)
-
-            all_available_nums = premium_nums + numbers_analysis
-            all_available_stars = hot_stars + stars_analysis
-
-            while len(key_nums) < 5:
-                num = None
-                for n in all_available_nums:
-                    if n['number'] not in used_nums and n['number'] not in temp_used_nums:
-                        num = n['number']
-                        break
-                if num is None:
-                    for i in range(1, 51):
-                        if i not in used_nums and i not in temp_used_nums:
-                            num = i
-                            break
-                if num is not None:
-                    key_nums.append(num)
-                    temp_used_nums.add(num)
-
-            while len(key_stars) < 2:
-                star = None
-                for s in all_available_stars:
-                    if s['star'] not in used_stars and s['star'] not in temp_used_stars:
-                        star = s['star']
-                        break
-                if star is None:
-                    for i in range(1, 13):
-                        if i not in used_stars and i not in temp_used_stars:
-                            star = i
-                            break
-                if star is not None:
-                    key_stars.append(star)
-                    temp_used_stars.add(star)
-
-            used_nums.update(key_nums)
-            used_stars.update(key_stars)
-            return {'numbers': sorted(key_nums), 'stars': sorted(key_stars)}
-
-        keys['principal'] = generate_key([(critical_nums, 2), (premium_nums, 5)], [(overdue_stars, 2)])
-        keys['secundaria'] = generate_key([(hot_nums, 3), (premium_nums, 5)], [(hot_stars, 2)])
-        keys['hibrida'] = generate_key([(critical_nums, 1), (hot_nums, 3), (premium_nums, 5)], [(overdue_stars, 1), (hot_stars, 2)])
-        return keys
+        return {
+            'total_draws': total_draws,
+            'numbers': numbers_analysis,
+            'stars': stars_analysis,
+            'hot_numbers': hot_numbers,
+            'overdue_numbers': overdue_numbers,
+            'number_frequencies': number_frequencies,
+            'star_frequencies': star_frequencies,
+        }
     except Exception as e:
         print(f"Error during analysis: {e}", file=sys.stderr)
         return None

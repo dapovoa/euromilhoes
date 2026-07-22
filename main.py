@@ -1,316 +1,233 @@
+#!/usr/bin/env python3
+"""Euromilhões — historical draw scraper and frequency analyzer.
+
+Usage:
+  python main.py scrape         Fetch latest draw data from euro-millions.com
+  python main.py stats          Print frequency statistics to terminal
+  python main.py stats --json   Output frequency statistics as JSON
+  python main.py export         Export all draws as JSON (to stdout or file)
+"""
+
+import argparse
+import json
 import os
 import sys
-from flask import Flask, jsonify, send_from_directory
-import json
 from datetime import datetime
-from functools import lru_cache
-from utils import colored_print, parse_draw_line, log_error, log_success, log_warning, log_info, log_cache
+
+from utils import colored_print, parse_draw_line, log_error, log_success, log_warning, log_info
 from logic import compute_frequency_analysis, EuromilhoesParser, setup_headless_chrome_linux
 
-static_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'web')
-app = Flask(__name__, static_folder=static_dir)
-
-_analysis_cache = {'data': None, 'timestamp': None}
-
-@app.route('/')
-def dashboard():
-    return send_from_directory(static_dir, 'index.html')
-
-@app.route('/<path:filename>')
-def static_files(filename):
-    return send_from_directory(static_dir, filename)
-
-@app.route('/css/<path:filename>')
-def css_files(filename):
-    return send_from_directory(os.path.join(static_dir, 'css'), filename)
-
-@app.route('/js/<path:filename>')
-def js_files(filename):
-    return send_from_directory(os.path.join(static_dir, 'js'), filename)
-
-@app.route('/images/<path:filename>')
-def image_files(filename):
-    return send_from_directory(os.path.join(static_dir, 'images'), filename)
-
-DATA_DIR = os.path.join(os.path.dirname(__file__), 'data')
-CACHE_FILE = os.path.join(DATA_DIR, 'cache.json')
-
+DATA_DIR = os.path.join(os.path.dirname(__file__), "data")
+CACHE_FILE = os.path.join(DATA_DIR, "cache.json")
 os.makedirs(DATA_DIR, exist_ok=True)
 
+
+# ---------------------------------------------------------------------------
+# Cache helpers
+# ---------------------------------------------------------------------------
+
 def load_cache():
-    """Carrega dados do cache em disco"""
     if os.path.exists(CACHE_FILE):
         try:
-            with open(CACHE_FILE, 'r', encoding='utf-8') as f:
-                cache_data = json.load(f)
-                return cache_data
+            with open(CACHE_FILE, "r", encoding="utf-8") as f:
+                return json.load(f)
         except Exception as e:
-            log_error(f"Erro ao carregar cache: {e}")
+            log_error(f"Failed to load cache: {e}")
     return None
 
-def save_cache(data, is_real_data=False, year_start=None, year_end=None):
-    """Salva dados no cache em disco"""
+
+def save_cache(draws, metadata=None):
     try:
-        cache_data = {
-            'draws': data,
-            'timestamp': datetime.now().isoformat(),
-            'total': len(data),
-            'source': 'scraping' if is_real_data else 'simulated',
-            'last_scraping': datetime.now().isoformat() if is_real_data else None,
-            'year_range': {
-                'start': year_start or 2004,
-                'end': year_end or datetime.now().year
-            } if is_real_data else None
+        cache = {
+            "draws": draws,
+            "timestamp": datetime.now().isoformat(),
+            "total": len(draws),
         }
-        with open(CACHE_FILE, 'w', encoding='utf-8') as f:
-            json.dump(cache_data, f, ensure_ascii=False, indent=2)
-        source_text = 'real' if is_real_data else 'simulado'
-        year_text = f" ({year_start}-{year_end})" if year_start and year_end else ""
-        log_cache(f"Salvo: {len(data)} sorteios ({source_text}){year_text}")
-        return True
+        if metadata:
+            cache.update(metadata)
+        with open(CACHE_FILE, "w", encoding="utf-8") as f:
+            json.dump(cache, f, ensure_ascii=False, indent=2)
+        log_success(f"Cached {len(draws)} draws to {CACHE_FILE}")
     except Exception as e:
-        log_error(f"Erro ao salvar cache: {e}")
-        return False
+        log_error(f"Failed to save cache: {e}")
 
-def get_simulated_data():
-    """Gera dados simulados mais realistas"""
-    import random
-    data = []
-    for _ in range(1868):  # Número aproximado de sorteios desde 2004
-        numbers = sorted(random.sample(range(1, 51), 5))
-        stars = sorted(random.sample(range(1, 13), 2))
-        data.append(f"{' '.join(map(str, numbers))} + {' '.join(map(str, stars))}")
-    return data
 
-def get_cache_year_range(cache_data):
-    """Analisa o cache e descobre que anos já temos"""
-    if not cache_data or 'draws' not in cache_data or not cache_data['draws']:
-        return None, None
+# ---------------------------------------------------------------------------
+# Scrape
+# ---------------------------------------------------------------------------
 
-    if 'year_range' in cache_data:
-        return cache_data['year_range'].get('start'), cache_data['year_range'].get('end')
+def cmd_scrape(args):
+    current_year = datetime.now().year
+    cache = load_cache()
+    existing = cache.get("draws", []) if cache else []
 
-    return 2004, datetime.now().year
+    if existing:
+        log_info(f"Cache has {len(existing)} draws — fetching only {current_year}...")
+    else:
+        log_info("No cache found — fetching all draws from 2004...")
 
-def scrape_intelligent():
-    """Scraping INTELIGENTE - analisa cache e busca apenas o necessário"""
-    try:
-        current_year = datetime.now().year
-        cache_data = load_cache()
+    chrome = setup_headless_chrome_linux()
+    if not chrome:
+        log_error("Could not find Chrome binary. Is chrome-headless-shell installed?")
+        sys.exit(1)
 
-        if not cache_data or 'draws' not in cache_data or len(cache_data['draws']) == 0:
-            log_warning("Cache vazio, primeira execucao")
-            log_info("Buscando todos os sorteios desde 2004...")
+    parser = EuromilhoesParser(chrome_binary_path=chrome, reuse_browser=True)
 
-            chrome_binary_path = setup_headless_chrome_linux()
-            parser = EuromilhoesParser(chrome_binary_path=chrome_binary_path, reuse_browser=True)
-            all_draws = parser.extract_all_years(2004, current_year)
-            parser.close()
-
-            if all_draws and len(all_draws) > 0:
-                log_success(f"Scraping completo: {len(all_draws)} sorteios obtidos")
-                return all_draws, 2004, current_year
-            else:
-                log_error("Scraping falhou, usando dados simulados")
-                return get_simulated_data(), None, None
-
-        existing_draws = cache_data['draws']
-        cache_start, cache_end = get_cache_year_range(cache_data)
-
-        log_cache(f"Cache encontrado: {len(existing_draws)} sorteios ({cache_start}-{cache_end})")
-        log_info(f"Verificando dados de {current_year}...")
-
-        chrome_binary_path = setup_headless_chrome_linux()
-        parser = EuromilhoesParser(chrome_binary_path=chrome_binary_path, reuse_browser=True)
+    if existing:
         new_draws = parser.extract_all_years(current_year, current_year)
-        parser.close()
+    else:
+        new_draws = parser.extract_all_years(2004, current_year)
 
-        if not new_draws or len(new_draws) == 0:
-            log_warning("Nenhum dado novo encontrado")
-            return existing_draws, cache_start, cache_end
+    parser.close()
 
-        existing_set = set(existing_draws)
-        new_unique = [d for d in new_draws if d not in existing_set]
+    if not new_draws:
+        log_warning("No draws fetched.")
+        return
 
-        if len(new_unique) == 0:
-            log_warning("Todos os dados ja estavam no cache")
-            return existing_draws, cache_start, cache_end
+    if existing:
+        existing_set = set(existing)
+        unique = [d for d in new_draws if d not in existing_set]
+        if not unique:
+            log_info("No new draws since last scrape.")
+            return
+        combined = sorted(existing + unique)
+        log_success(f"Added {len(unique)} new draws — total {len(combined)}")
+    else:
+        combined = sorted(new_draws)
+        log_success(f"Fetched {len(combined)} draws")
 
-        combined_draws = existing_draws + new_unique
-        combined_draws.sort()
+    save_cache(combined, {"source": "euro-millions.com", "year_start": 2004, "year_end": current_year})
 
-        log_success(f"{len(new_unique)} novos sorteios adicionados")
-        log_success(f"Total: {len(combined_draws)} sorteios")
 
-        return combined_draws, cache_start or 2004, current_year
+# ---------------------------------------------------------------------------
+# Stats
+# ---------------------------------------------------------------------------
 
-    except Exception as e:
-        log_error(f"Erro no scraping: {e}")
-        import traceback
-        traceback.print_exc()
 
-        cache_data = load_cache()
-        if cache_data and 'draws' in cache_data and len(cache_data['draws']) > 0:
-            log_warning(f"Mantendo cache existente: {len(cache_data['draws'])} sorteios")
-            cache_start, cache_end = get_cache_year_range(cache_data)
-            return cache_data['draws'], cache_start, cache_end
-        else:
-            log_warning("Gerando dados simulados")
-            return get_simulated_data(), None, None
 
-def get_historical_data(force_refresh=False):
-    """Função para obter dados históricos - usa cache em disco"""
-    if force_refresh:
-        log_info("Atualizacao de dados solicitada")
-        data, year_start, year_end = scrape_intelligent()
-        save_cache(data, is_real_data=True, year_start=year_start, year_end=year_end)
-        return data
 
-    cache_data = load_cache()
-    if cache_data and 'draws' in cache_data:
-        return cache_data['draws']
+def cmd_stats(args):
+    cache = load_cache()
+    if not cache or "draws" not in cache or not cache["draws"]:
+        log_error("No data found. Run `python main.py scrape` first.")
+        sys.exit(1)
 
-    log_warning("Cache nao encontrado - gerando dados simulados iniciais...")
-    data = get_simulated_data()
-    save_cache(data, is_real_data=False)
-    log_info("Use 'Atualizar Dados' para obter dados reais")
-    return data
+    draws = cache["draws"]
+    analysis = compute_frequency_analysis(draws)
+    if not analysis:
+        log_error("Analysis failed.")
+        sys.exit(1)
 
-def _is_cache_valid(cache_ttl_seconds=60):
-    """Check if cached analysis is still valid (TTL in seconds)"""
-    if _analysis_cache['data'] is None or _analysis_cache['timestamp'] is None:
-        return False
-    age = (datetime.now() - _analysis_cache['timestamp']).total_seconds()
-    return age < cache_ttl_seconds
+    if args.json:
+        print(json.dumps(analysis, ensure_ascii=False, indent=2))
+        return
 
-@app.route('/api/analysis')
-def get_analysis():
-    """API endpoint para obter dados de análise - usa cache em memória com TTL 60s"""
-    global _analysis_cache
+    # Terminal output
+    print()
+    print(f"  Euromilhões — Frequency Analysis ({len(draws)} draws)")
+    print(f"  {'=' * 46}")
+    print()
 
-    if _is_cache_valid(cache_ttl_seconds=60):
-        return jsonify(_analysis_cache['data'])
+    def tab(headers, rows):
+        widths = []
+        for i, h in enumerate(headers):
+            col_vals = [str(r[i]) for r in rows] + [h]
+            widths.append(max(len(v) for v in col_vals))
+        print("  " + "  ".join(h.ljust(widths[i]) for i, h in enumerate(headers)))
+        print("  " + "  ".join("-" * widths[i] for i in range(len(headers))))
+        for row in rows:
+            print("  " + "  ".join(str(row[i]).ljust(widths[i]) for i in range(len(headers))))
 
-    try:
-        historical_data = get_historical_data(force_refresh=False)
-        analysis = compute_frequency_analysis(historical_data)
-        
-        if not analysis:
-            analysis = {
-                'principal': {'numbers': [19, 23, 28, 34, 44], 'stars': [2, 11]},
-                'secundaria': {'numbers': [1, 3, 4, 21, 42], 'stars': [1, 3]},
-                'hibrida': {'numbers': [6, 8, 10, 29, 50], 'stars': [4, 10]}
-            }
+    top_nums = sorted(analysis["numbers"], key=lambda x: x["freq"], reverse=True)[:10]
+    print("  ## Top 10 Numbers (by frequency)")
+    tab(
+        ["#", "Number", "Frequency", "Overdue"],
+        [
+            (str(i), str(n["number"]), str(n["freq"]),
+             f"{n.get('overdueRatio', 0):.1f}x" if n.get("overdueRatio", 0) > 0 else "-")
+            for i, n in enumerate(top_nums, 1)
+        ],
+    )
+    print()
 
-        number_frequencies = [0] * 50
-        star_frequencies = [0] * 12
+    stars = sorted(analysis["stars"], key=lambda x: x["freq"], reverse=True)
+    print("  ## Star Frequencies")
+    tab(
+        ["Star", "Frequency"],
+        [(str(s["star"]), str(s["freq"])) for s in stars],
+    )
+    print()
 
-        for draw in historical_data:
-            try:
-                numbers, stars = parse_draw_line(draw)
-                for n in numbers:
-                    if 1 <= n <= 50:
-                        number_frequencies[n-1] += 1
-                for s in stars:
-                    if 1 <= s <= 12:
-                        star_frequencies[s-1] += 1
-            except ValueError:
-                continue
+    overdue = analysis["overdue_numbers"][:10]
+    print("  ## Longest overdue numbers")
+    tab(
+        ["Number", "Overdue ratio"],
+        [(str(n["number"]), f"{n.get('overdueRatio', 0):.2f}x") for n in overdue],
+    )
+    print()
 
-        top_numbers = [{'number': i+1, 'frequency': freq} for i, freq in enumerate(number_frequencies)]
-        top_numbers.sort(key=lambda x: x['frequency'], reverse=True)
-        top_numbers = top_numbers[:5]
 
-        import random
-        overdue_numbers = []
-        used_numbers = set()
-        while len(overdue_numbers) < 5:
-            num = random.randint(1, 50)
-            if num not in used_numbers:
-                overdue_numbers.append({'number': num, 'drawsAgo': random.randint(20, 60)})
-                used_numbers.add(num)
-        overdue_numbers.sort(key=lambda x: x['drawsAgo'], reverse=True)
+# ---------------------------------------------------------------------------
+# Export
+# ---------------------------------------------------------------------------
 
-        cache_data = load_cache()
-        cache_info = {
-            'source': cache_data.get('source', 'unknown') if cache_data else 'unknown',
-            'lastScraping': cache_data.get('last_scraping') if cache_data else None,
-            'cacheTimestamp': cache_data.get('timestamp') if cache_data else None
-        }
+def cmd_export(args):
+    cache = load_cache()
+    if not cache or "draws" not in cache or not cache["draws"]:
+        log_error("No data found. Run `python main.py scrape` first.")
+        sys.exit(1)
 
-        last_draw_numbers = []
-        last_draw_stars = []
-        if historical_data and len(historical_data) > 0:
-            try:
-                last_draw_numbers, last_draw_stars = parse_draw_line(historical_data[-1])
-            except ValueError:
-                pass
+    draws = cache["draws"]
+    parsed = []
+    for line in draws:
+        try:
+            nums, stars = parse_draw_line(line)
+            parsed.append({"numbers": nums, "stars": stars})
+        except ValueError:
+            continue
 
-        response_data = {
-            'totalDraws': len(historical_data),
-            'lastDrawDate': datetime.now().strftime('%Y-%m-%d'),
-            'lastUpdate': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
-            'lastDrawNumbers': last_draw_numbers,
-            'lastDrawStars': last_draw_stars,
-            'cacheInfo': cache_info,
-            'analysis': analysis,
-            'topNumbers': top_numbers,
-            'overdueNumbers': overdue_numbers,
-            'numberFrequencies': number_frequencies,
-            'starFrequencies': star_frequencies
-        }
+    output = json.dumps(
+        {"total": len(parsed), "source": "euro-millions.com", "draws": parsed},
+        ensure_ascii=False,
+        indent=2,
+    )
 
-        _analysis_cache['data'] = response_data
-        _analysis_cache['timestamp'] = datetime.now()
+    out_path = args.output or "euromilhoes.json"
+    with open(out_path, "w", encoding="utf-8") as f:
+        f.write(output)
+    log_success(f"Exported to {out_path}")
 
-        return jsonify(response_data)
 
-    except Exception as e:
-        log_error(f"Erro na API: {e}")
-        import traceback
-        traceback.print_exc()
-        return jsonify({'error': str(e)}), 500
+# ---------------------------------------------------------------------------
+# CLI entry point
+# ---------------------------------------------------------------------------
 
-@app.route('/api/update')
-def update_data():
-    """API endpoint para atualizar os dados - faz scraping real"""
-    global _analysis_cache
+def main():
+    parser = argparse.ArgumentParser(
+        description="Euromilhões — historical draw scraper and frequency analyzer."
+    )
+    sub = parser.add_subparsers(dest="command", required=True)
 
-    try:
-        log_info("Pedido de atualização recebido - iniciando scraping...")
-        _analysis_cache['data'] = None
-        _analysis_cache['timestamp'] = None
+    # scrape
+    sub.add_parser("scrape", help="Fetch latest draw data from euro-millions.com")
 
-        historical_data = get_historical_data(force_refresh=True)
+    # stats
+    stats_p = sub.add_parser("stats", help="Print frequency statistics")
+    stats_p.add_argument("--json", action="store_true", help="Output as JSON")
 
-        if historical_data and len(historical_data) > 0:
-            return jsonify({
-                'status': 'success',
-                'message': f'Dados atualizados com sucesso! {len(historical_data)} sorteios processados',
-                'totalDraws': len(historical_data),
-                'timestamp': datetime.now().isoformat()
-            })
-        else:
-            return jsonify({'status': 'error', 'message': 'Falha ao obter dados'}), 500
+    # export
+    export_p = sub.add_parser("export", help="Export all draws as JSON")
+    export_p.add_argument("-o", "--output", help="Output file (default: stdout)")
 
-    except Exception as e:
-        log_error(f"Erro ao atualizar dados: {e}")
-        import traceback
-        traceback.print_exc()
-        return jsonify({'status': 'error', 'message': str(e)}), 500
+    args = parser.parse_args()
 
-if __name__ == '__main__':
-    import logging
-    import os
+    if args.command == "scrape":
+        cmd_scrape(args)
+    elif args.command == "stats":
+        cmd_stats(args)
+    elif args.command == "export":
+        cmd_export(args)
 
-    log = logging.getLogger('werkzeug')
-    log.setLevel(logging.ERROR)
-    log.disabled = True
 
-    cli = sys.modules['flask.cli']
-    cli.show_server_banner = lambda *x: None
-
-    log_success("Servidor iniciado em http://127.0.0.1:5001")
-    log_info("Pressione CTRL+C para sair")
-
-    app.run(debug=False, host='0.0.0.0', port=5001, use_reloader=False)
+if __name__ == "__main__":
+    main()

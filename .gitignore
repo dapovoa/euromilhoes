@@ -1,11 +1,8 @@
+# Generated data
+data/
+chrome/
+
 # Python
 __pycache__/
-*.py[cod]
-*$py.class
-
-# Virtual environment
+*.pyc
 venv/
-
-# Application-specific
-chrome/
-data/
